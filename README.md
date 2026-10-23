@@ -260,6 +260,145 @@ The completed bundle's `verification.json` records an offline relocated load,
 prediction parity on all 8,519 test embeddings, and real-audio checks through
 both `classify_batch()` and `classify_file()`.
 
+## Three-language extension (15 languages total)
+
+The extension adds **Samoan (`sam`), Niuean (`niu`), and Tongan (`ton`)** to the
+original 12. Cook Islands Māori / Rarotongan is excluded. Existing 12-language
+artifacts and commands are preserved.
+
+Run or resume the complete pipeline:
+
+```bash
+uv run python -u scripts/run_extension15.py
+```
+
+The runner automatically enters a systemd scope with a 4 GiB RAM limit,
+swap disabled, and reduced CPU/I/O priority. It runs GPU work sequentially.
+Specific stages can be run with `--stage audit`, `cache`, `frozen`,
+`evaluate_frozen`, `partial`, `evaluate_partial`, or `comparison`.
+
+Watch live progress without loading tensors:
+
+```bash
+watch -n 10 python3 scripts/progress.py --extension
+```
+
+The output includes the current phase, per-epoch/per-cache progress, selected
+epoch, pipeline milestones, worker state, memory limits and audited split sizes.
+An epoch percentage is progress through that epoch, not an overall ETA.
+
+Artifacts and logs live in `artifacts/extension15/`. The final report is
+`reports/extension15/language_extension.md`; both trained models receive their
+own `speechbrain_bundle/` inside the `frozen/` and `partial/` output directories.
+The final `status.json` phase becomes `complete` only after evaluation, bundle
+verification, and report generation. On a normal exception it records `failed`;
+worker state also exposes interruptions or kernel termination.
+
+Protocol:
+
+- Snapshot and audit all WAV cuts from the three supplied external segment
+  directories. Originals are read only; new scraper output is not added midway.
+- Approximate 80/5/5/10 train/selection/calibration/test assignment by hashed
+  source-recording group, seed 42. Cuts and exact-duplicate-linked sources do
+  not cross partitions. Source independence does not prove speaker independence.
+- Initialize both methods identically from the uncalibrated 12-language head,
+  preserve its 12 output rows, and append three new rows in `sam, niu, ton` order.
+- Sample the 15 training classes uniformly, including original VoxLingua replay.
+  Each logical epoch draws 32,768 examples; the effective batch size is 32.
+- Frozen method: classifier training from cached embeddings. Partial method:
+  additionally train encoder `mfa`, `asp`, and `fc`, detaching earlier blocks.
+  Encoder batch-normalization parameters and statistics remain frozen; classifier
+  normalization affine parameters train, with running statistics frozen.
+- AdamW, head LR 1e-4, encoder-tail LR 1e-5, weight decay 1e-4, gradient norm
+  limit 5, AMP, at most 20 epochs and patience 5. Select by 15-class validation
+  macro F1, breaking ties by class-balanced NLL. No regression limit is imposed.
+- Partial training starts with microbatch 2 and accumulation 16. A real backward
+  preflight must reserve less than 7 GiB VRAM; otherwise use microbatch 1 with
+  accumulation 32. Frozen parameters/buffers are checked for changes each epoch.
+- New-model evaluation retains all 15 outputs on both the original FLEURS test
+  set and new-language test cuts. Joint calibration uses FLEURS validation and
+  the reserved new calibration groups; an additional old-only calibration fit
+  supports comparison with the original protocol. No test-set checkpoint tuning.
+- The baseline six evaluations are recomputed from saved logits and checked
+  against their original metrics. Encoder-tail changes invalidate original
+  embeddings; partial-model validation and evaluation features are recomputed.
+- Waveforms remain mono 16 kHz with a maximum 10-second center crop and no
+  added amplitude normalization. Validation-only gain probes quantify whether
+  quieter Samoan recordings are sensitive to uniform volume changes.
+
+Training checkpoints resume from completed optimizer steps (saved every 4,096
+examples and at epoch boundaries). Feature extraction resumes from durable
+256-example shards. Changed audit snapshots, encoder weights, cache contexts,
+or model/data identities are rejected rather than silently reused.
+
+## Held-out YouTube validation with VAD
+
+```bash
+uv run python scripts/evaluate_youtube.py --min-seconds 3 --output artifacts/youtube_validation_v2
+```
+
+This runs under a 3 GiB systemd RAM cap with swap disabled. It reads WAVs and MP3s from
+`validation_clips/Samoan`, `validation_clips/Tongan`, and `validation_clips/Nuiean`
+(the spelling `Niuean` is also accepted). Originals and model weights are read
+only. Decode one file at a time; Silero VAD 6.2.3 runs on CPU. Speech regions
+shorter than 3 seconds are discarded, while longer regions are split evenly
+into non-overlapping segments of at most 10 seconds. Durations include VAD
+padding. No added level normalization or test-set fitting is performed.
+
+Both 15-language models are evaluated. Original-107, filtered-12 and previous
+fine-tuned-12 models are included as reference controls; they lack all three
+new-language outputs and cannot recognize these target labels.
+
+For each model, top-1 English predictions are counted (including seconds and
+source/language breakdowns) and excluded from accuracy, precision, recall, F1
+and ECE. Other output languages remain errors. Coverage is always reported;
+an empty scoring cohort has undefined metrics. A second comparison uses the
+same segments for both 15-language models, excluding the union of their
+English predictions. Macro scores average over target languages with retained
+examples. Source-balanced and duration-weighted accuracy are also exported.
+
+These are provisional directory-label metrics. Predicted English may be an
+actual code-switch or a Pacific-language error, and true English can be missed.
+With few source clips per language, many slices do not constitute many
+independent speakers or videos; short/long extracts can also overlap. The report describes these limitations and a timestamped
+review queue supports manual annotation.
+
+- Report and publication figures: `reports/youtube_validation/held_out_evaluation.md`.
+- Current expanded-corpus artifacts: `artifacts/youtube_validation_v2/`, including full predictions and
+  probabilities, model/source/VAD hashes, VAD boundaries, extracted WAVs,
+  conditional and common-cohort metrics, per-source results and annotation CSVs.
+- Runtime log: `artifacts/youtube_evaluation_v2.log`; phase: the artifact directory's
+  `status.json`. Cached embeddings are fingerprinted by model and segment data.
+- Use a fresh `--output` directory when changing source clips or VAD/minimum
+  duration settings. Report regeneration reads the saved results without fitting.
+- The original seven-clip artifacts remain in `artifacts/youtube_validation/`;
+  their report and figures are preserved in `reports/youtube_validation_previous_7clips/`.
+
+## Pacific speaker and embedding study
+
+```bash
+uv run python scripts/run_speaker_study.py
+uv run python scripts/progress.py --speakers
+```
+
+- Outputs: `artifacts/speaker_study/`; report and offline interactive explorers:
+  `reports/speaker_study/`. The runner enforces 4 GiB host RAM with swap disabled.
+- Stages: `extract`, `audit`, `visualize`, `train`, `evaluate`, `report`, or `all`.
+  Sharded extraction and fingerprinted caches allow resumption.
+- The revision-pinned public speaker model is downloaded anonymously on first run;
+  subsequent model execution is offline. Original audio and experiment outputs remain intact.
+- Automatic speaker-similarity groups are not verified identities. Cosine thresholds
+  0.4–0.8 are audited; the primary 0.5 grouping links recordings and potential speakers.
+- Retraining runs only if four partitions can each retain all three languages,
+  an independent connected group, and at least 50 cuts per language. Otherwise the
+  audit and visualizations finish and the report explains why training stopped.
+- If feasible: compare uniform and speaker-balanced sampling on the same new split,
+  with frozen and partial encoders, seed 42, original-language replay and FLEURS
+  regression checks. Reuse the existing two recording-split baselines.
+- UMAP covers Pacific radio and fixed external segments only, separately for the
+  base and existing partial encoder. Clustering uses PCA-reduced embeddings rather
+  than 2D plot coordinates. Interactive views include audio references.
+
 ## Sources
 
 - [Pretrained model card](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa)

@@ -31,6 +31,97 @@ def cached(split):
 
 
 def main():
+    import sys
+
+    if "--speakers" in sys.argv:
+        import subprocess
+
+        directory = Path("artifacts/speaker_study")
+        result = {}
+        for key, filename in (
+            ("current", "status.json"),
+            ("audit", "audit_complete.json"),
+            ("split_gate", "split_gate.json"),
+        ):
+            path = directory / filename
+            if path.exists():
+                result[key] = json.loads(path.read_text())
+        result["speaker_shards_completed"] = len(
+            list((directory / "speaker_parts").glob("part-*.pt"))
+        )
+        result["geometry_complete"] = [
+            method
+            for method in ("frozen", "partial")
+            if (directory / f"{method}_geometry_complete.json").exists()
+        ]
+        result["training_complete"] = [
+            str(path.relative_to(directory))
+            for path in sorted((directory / "runs").glob("*/*/complete.json"))
+        ]
+        worker = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "lid-speaker-study.scope",
+                "-p",
+                "ActiveState",
+                "-p",
+                "MemoryCurrent",
+                "-p",
+                "MemoryMax",
+                "-p",
+                "MemorySwapMax",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result["worker"] = dict(
+            line.split("=", 1) for line in worker.stdout.splitlines() if "=" in line
+        )
+        print(json.dumps(result, indent=2))
+        return
+    if "--extension" in sys.argv:
+        import subprocess
+
+        directory = Path("artifacts/extension15")
+        result = {}
+        for key, name in (
+            ("current", "status.json"),
+            ("pipeline", "pipeline.json"),
+            ("data", "data_ready.json"),
+        ):
+            if (directory / name).exists():
+                result[key] = json.loads((directory / name).read_text())
+        result["free_disk_gib"] = round(shutil.disk_usage(".").free / 1024**3, 1)
+        workers = {}
+        for unit in ("lid-extension15-cache.scope", "lid-extension15.scope"):
+            worker = subprocess.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    unit,
+                    "-p",
+                    "ActiveState",
+                    "-p",
+                    "MemoryCurrent",
+                    "-p",
+                    "MemoryMax",
+                    "-p",
+                    "MemorySwapMax",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            workers[unit] = dict(
+                line.split("=", 1) for line in worker.stdout.splitlines() if "=" in line
+            )
+        result["workers"] = workers
+        print(json.dumps(result, indent=2))
+        return
     prepared = sorted(path.stem.split(".")[0] for path in DATA.glob("*.extracted.json"))
     archives = sorted(path.stem for path in (DATA / "archives").glob("*.zip"))
     available = next(

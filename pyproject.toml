@@ -5,10 +5,18 @@ description = "Closed-set VoxLingua107 adaptation and FLEURS calibration experim
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-  "torch==2.5.1", "torchaudio==2.5.1", "speechbrain==1.0.3",
-  "huggingface-hub>=0.25,<1", "datasets>=3.6,<4",
-  "numpy>=1.26,<3", "scipy>=1.11", "soundfile>=0.12",
-  "scikit-learn>=1.4", "matplotlib>=3.8",
+  "torch==2.5.1",
+  "torchaudio==2.5.1",
+  "speechbrain==1.0.3",
+  "huggingface-hub>=0.25,<1",
+  "datasets>=3.6,<4",
+  "numpy>=1.26,<3",
+  "scipy>=1.11",
+  "soundfile>=0.12",
+  "scikit-learn>=1.4",
+  "matplotlib>=3.8",
+  "silero-vad==6.2.3",
+  "umap-learn==0.5.9.post2",
 ]
 
 [project.scripts]
