@@ -443,7 +443,9 @@ class Study:
         directory.mkdir(exist_ok=True)
         if not (directory / "training_complete.json").exists():
             self.train_frozen(directory)
-        width = json.loads((self.root / "model_identity.json").read_text())["dims"]["n_audio_state"]
+        width = json.loads((self.root / "model_identity.json").read_text())["dims"][
+            "n_audio_state"
+        ]
         head = whisper_head(width).to("cuda")
         saved = torch.load(
             directory / "model.pt", map_location="cpu", weights_only=True
@@ -487,7 +489,9 @@ class Study:
         validation_targets = torch.tensor(
             [CODES.index(r["language"]) for r in self.rows("vox_validation")]
         )
-        width = json.loads((self.root / "model_identity.json").read_text())["dims"]["n_audio_state"]
+        width = json.loads((self.root / "model_identity.json").read_text())["dims"][
+            "n_audio_state"
+        ]
         head = whisper_head(width).to("cuda")
         optimizer = torch.optim.AdamW(
             head.parameters(),

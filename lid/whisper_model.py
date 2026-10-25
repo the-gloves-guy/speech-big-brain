@@ -66,18 +66,28 @@ def load_whisper(root, device="cuda"):
         from whisper.model import AudioEncoder
 
         path = Path(root) / "pretrained" / identity["encoder_checkpoint"]
+        from .extension_data import file_hash
+
+        if file_hash(path) != identity["encoder_checkpoint_sha256"]:
+            raise ValueError("Extracted encoder checkpoint checksum changed")
         saved = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
         dims = saved["dims"]
         if dims != identity["dims"]:
             raise ValueError("Encoder checkpoint dimensions differ from identity")
         model = nn.Module()
         model.dims = SimpleNamespace(**dims)
-        model.encoder = AudioEncoder(dims["n_mels"], dims["n_audio_ctx"], dims["n_audio_state"],
-                                     dims["n_audio_head"], dims["n_audio_layer"])
+        model.encoder = AudioEncoder(
+            dims["n_mels"],
+            dims["n_audio_ctx"],
+            dims["n_audio_state"],
+            dims["n_audio_head"],
+            dims["n_audio_layer"],
+        )
         model.encoder.load_state_dict(saved["encoder"])
         return model.to(device).eval()
     return whisper.load_model(
-        str(Path(root) / "pretrained" / f"{identity.get('model', 'tiny')}.pt"), device=device
+        str(Path(root) / "pretrained" / f"{identity.get('model', 'tiny')}.pt"),
+        device=device,
     ).eval()
 
 

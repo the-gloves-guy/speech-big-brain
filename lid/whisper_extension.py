@@ -108,6 +108,7 @@ class ExtensionAdapter(Adapter):
 
 class ExtensionStudy(Study):
     adapter_class = ExtensionAdapter
+
     def __init__(
         self, config="configs/whisper15.json", root="artifacts/whisper_tiny15"
     ):
@@ -314,12 +315,24 @@ class ExtensionStudy(Study):
             source = self.base / "cache" / name
             saved = json.loads((source / "complete.json").read_text())
             identity = json.loads((source / "identity.json").read_text())
+            model_identity = json.loads((self.root / "model_identity.json").read_text())
             if (
-                identity["rows"] != file_hash(self.root / "cohorts" / f"{name}.jsonl")
+                identity["model"] != model_identity
+                or identity["rows"]
+                != file_hash(self.root / "cohorts" / f"{name}.jsonl")
                 or saved["identity"] != digest(identity)
                 or saved["features_sha256"] != file_hash(source / "features.npy")
             ):
                 raise ValueError("Original Whisper cache is stale")
+            cached = np.load(source / "features.npy", mmap_mode="r")
+            if cached.shape != (
+                saved["n"],
+                2 * model_identity["dims"]["n_audio_state"],
+            ):
+                raise ValueError(
+                    "Original feature cache dimensions differ from encoder"
+                )
+            del cached
             bind(
                 self.root / f"reused_{name}.json",
                 {"identity": identity, "complete": saved},
@@ -334,7 +347,9 @@ class ExtensionStudy(Study):
             "new_test",
             "external",
         ]:
-            self.cache(name, native=name == "external" and self.config["model"] == "tiny")
+            self.cache(
+                name, native=name == "external" and self.config["model"] == "tiny"
+            )
 
     def cache(self, cohort, native=False):
         directory = self.root / "cache" / cohort
@@ -400,6 +415,11 @@ class ExtensionStudy(Study):
                 ]
             },
         }
+        if self.config["model"] == "small":
+            identity["implementation"]["whisper_small.py"] = file_hash(
+                Path(__file__).with_name("whisper_small.py")
+            )
+            identity["preflight"] = file_hash(self.root / "preflight.json")
         bind(output / "identity.json", identity)
         if (output / "training_complete.json").exists():
             adapter.release()
@@ -457,7 +477,11 @@ class ExtensionStudy(Study):
                     "lr": self.config["encoder_lr"],
                 }
             )
-        optimizer = torch.optim.AdamW(groups, weight_decay=self.config["weight_decay"])
+        optimizer = torch.optim.AdamW(
+            groups,
+            weight_decay=self.config["weight_decay"],
+            **({"foreach": False} if self.config["model"] == "small" else {}),
+        )
         scaler = torch.amp.GradScaler("cuda", init_scale=1024)
         epoch, cursor, stale, best, history = 1, 0, 0, (-1.0, float("-inf")), []
         resume = output / "resume.pt"

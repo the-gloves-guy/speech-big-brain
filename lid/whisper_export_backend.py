@@ -83,3 +83,8 @@ class WhisperTinyLIDClassifier(nn.Sequential):
 
     def forward(self, embeddings):
         return super().forward(embeddings).log_softmax(dim=-1)
+
+
+# Architecture-neutral names for new bundles; retain the historical Tiny API.
+WhisperLIDEncoder = WhisperTinyLIDEncoder
+WhisperLIDClassifier = WhisperTinyLIDClassifier

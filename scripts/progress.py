@@ -33,12 +33,19 @@ def cached(split):
 def main():
     import sys
 
-    if "--whisper" in sys.argv or "--whisper15" in sys.argv:
+    if any(
+        flag in sys.argv for flag in ["--whisper", "--whisper15", "--whisper-small15"]
+    ):
         import subprocess
 
-        extension = "--whisper15" in sys.argv
+        small = "--whisper-small15" in sys.argv
+        extension = "--whisper15" in sys.argv or small
         directory = Path(
-            "artifacts/whisper_tiny15" if extension else "artifacts/whisper_tiny12"
+            "artifacts/whisper_small15"
+            if small
+            else "artifacts/whisper_tiny15"
+            if extension
+            else "artifacts/whisper_tiny12"
         )
         result = {}
         for key, filename in (
@@ -49,6 +56,29 @@ def main():
             path = directory / filename
             if path.exists():
                 result[key] = json.loads(path.read_text())
+        if small:
+            for key, path in [
+                ("preflight", directory / "preflight.json"),
+                ("warm_start", Path("artifacts/whisper_small12/status.json")),
+            ]:
+                if path.exists():
+                    result[key] = json.loads(path.read_text())
+            result["warm_cache_shards"] = {
+                name: len(
+                    list(
+                        (Path("artifacts/whisper_small12/cache") / name / "parts").glob(
+                            "part-*.npz"
+                        )
+                    )
+                )
+                for name in [
+                    "vox_train",
+                    "vox_validation",
+                    "fleurs_validation",
+                    "fleurs_test",
+                    "external",
+                ]
+            }
         result["training_complete"] = [
             str(path.relative_to(directory))
             for path in sorted(directory.glob("*/training_complete.json"))
@@ -77,7 +107,11 @@ def main():
                 "systemctl",
                 "--user",
                 "show",
-                "lid-whisper15.service" if extension else "lid-whisper12.service",
+                "lid-whisper-small15.service"
+                if small
+                else "lid-whisper15.service"
+                if extension
+                else "lid-whisper12.service",
                 "-p",
                 "ActiveState",
                 "-p",

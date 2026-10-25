@@ -88,7 +88,9 @@ def evaluate_models(study):
         directory = study.root / method
         if not (directory / "training_complete.json").exists():
             raise ValueError(f"Training incomplete: {method}")
-        adapter = getattr(study, "adapter_class", ExtensionAdapter)(study.root, directory / "model.pt")
+        adapter = getattr(study, "adapter_class", ExtensionAdapter)(
+            study.root, directory / "model.pt"
+        )
         values = {}
         for cohort in [
             "vox_validation",
@@ -343,6 +345,7 @@ def external_results(study):
     historical = set(inventory["historical_segment_ids"])
     provenance = json.loads((output / "model_provenance.json").read_text())
     models = {}
+    prefix = getattr(study, "extension_prefix", "whisper15")
     with np.load(output / "logits.npz") as saved:
         if saved["ids"].tolist() != [r["id"] for r in rows]:
             raise ValueError("SpeechBrain segment IDs differ")
@@ -371,8 +374,10 @@ def external_results(study):
             if saved["ids"].tolist() != [r["id"] for r in rows]:
                 raise ValueError("Compared model segment IDs differ")
             models[
-                f"whisper15_{method}" if method in ["frozen", "finetuned"] else method
+                f"{prefix}_{method}" if method in ["frozen", "finetuned"] else method
             ] = (saved["logits"], saved["codes"].tolist(), calibration["temperature"])
+    if hasattr(study, "additional_external_models"):
+        models.update(study.additional_external_models())
     predictions = {
         m: np.array([codes[i] for i in logits.argmax(1)])
         for m, (logits, codes, _) in models.items()

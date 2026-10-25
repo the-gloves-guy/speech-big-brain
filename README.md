@@ -23,6 +23,34 @@ driver. The initial installation downloads several GB of dependencies. Dataset
 and model downloads need internet access. The uv lockfile records resolved
 dependencies. `uv run lid cache --device cpu ...` supports CPU extraction too.
 
+## Offline deployment notebook
+
+Open [notebooks/offline_deployment_demo.ipynb](notebooks/offline_deployment_demo.ipynb)
+for loading Whisper Small frozen, SpeechBrain partial15 and Whisper Tiny frozen
+directly from their extracted deployment folders. It shows the supported language
+set and output order, single-file inference, probabilities, and padded batch
+inference with real audio lengths. It defaults to CPU and uses no project imports,
+model downloads or internet services.
+
+Prepare notebook tooling before disconnecting with `uv sync --group notebook`,
+then select `.venv/bin/python` as the notebook kernel in your editor. Set the
+deployment and audio paths in the configuration cell. In this checkout the demo
+automatically finds the three deployment folders and existing local v4 speech
+segments; when moving it elsewhere, supply your own local audio. No install cells
+are run in the notebook, and existing deployment folders are left unchanged.
+
+To reproduce the real-kernel checks without internet access:
+
+```bash
+uv run --offline --group notebook python scripts/check_offline_notebook.py
+uv run --offline --group notebook python scripts/check_offline_notebook.py --reverse-model-order
+```
+
+These checks use an empty Hugging Face cache and block Python network connections
+inside the kernel. They also verify that all three models expose fifteen languages
+and perform single-file and unequal-length batch inference. Add `--write` to save
+the executed example outputs into the notebook.
+
 ## Experiment design
 
 1. **Filter and rescale:** select the twelve allowed columns of the original
@@ -568,3 +596,40 @@ before archives and checksums are finalized. Their bundled custom backend suppor
 temperature calibration folded once into the classifier. The study is complete
 only after all training, evaluation, diagnostics, export verification and report
 stages succeed; a running service does not indicate completed results.
+
+### Focused Whisper Small15 study
+
+```bash
+uv run python scripts/run_whisper_small15.py --background
+uv run python scripts/progress.py --whisper-small15
+```
+
+`configs/whisper_small15.json` uses multilingual Small and fresh output directories
+`artifacts/whisper_small12` (frozen warm-start) and `artifacts/whisper_small15`
+(paired fifteen-language study). The warm-start copies the original recording
+manifests and trains a Small twelve-language classifier; it reuses no Tiny weights
+or embeddings. Both Small15 variants start from this same selected classifier.
+The focused scope excludes native/filtered Small controls and a fine-tuned
+Small12 control. Comparisons with the frozen Small12 warm-start are explicitly
+labelled, while completed Tiny and SpeechBrain controls are reused only after
+matching cohort IDs, fingerprints, checkpoints and calibration provenance.
+
+The resource preflight covers a full optimizer step and checkpoint save, trying
+microbatch 2, then 1, then 1 with encoder gradient checkpointing if necessary.
+The effective batch stays 32 and the original ten-second real-audio/thirty-second
+Whisper preprocessing remains fixed. The runner uses separate stage processes
+under one 4 GiB, zero-swap, two-CPU systemd unit and the shared single-GPU lock.
+If a stage fails, inspect `artifacts/whisper_small15/pipeline.log`, resolve the
+failure, clear `lid-whisper-small15.service` with `systemctl --user reset-failed`,
+and rerun the same command. Verified cache shards and training state resume;
+changed identities are rejected rather than silently reused.
+
+Stages are `prepare_model`, `preflight`, `warm_cache`, `warm_train`,
+`warm_evaluate`, `prepare`, `cache_all`, `frozen`, `finetuned`, `evaluate`,
+`baselines`, `diagnostics`, `export`, `report`, or `all` (default).
+Final self-contained HTML/PDF reports and all figures are written under
+`reports/whisper_small15`; standalone calibrated deployment folders, archives,
+loading examples and checksums use `artifacts/deployment/whisper_small15_*`.
+Reports require completed test/external predictions and relocated offline export
+verification. A running worker or implemented report builder is not a finished
+Small experiment.

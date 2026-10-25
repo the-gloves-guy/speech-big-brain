@@ -19,6 +19,19 @@ def export_one(study, method, output):
     from speechbrain.dataio.encoder import CategoricalEncoder
 
     source = study.root / method
+    identity_path = study.root / "model_identity.json"
+    identity = json.loads(identity_path.read_text()) if identity_path.exists() else {}
+    model_name = identity.get("model", "tiny")
+    dims = identity.get(
+        "dims",
+        {
+            "n_mels": 80,
+            "n_audio_ctx": 1500,
+            "n_audio_state": 384,
+            "n_audio_head": 6,
+            "n_audio_layer": 4,
+        },
+    )
     if not (source / "evaluation_complete.json").exists():
         raise ValueError("Cannot export an unevaluated model")
     saved = torch.load(source / "model.pt", map_location="cpu", weights_only=True)
@@ -58,12 +71,18 @@ def export_one(study, method, output):
     shutil.copyfile(
         Path(__file__).with_name("whisper_export_backend.py"), temporary / "custom.py"
     )
-    (temporary / "hyperparams.yaml").write_text("""sample_rate: 16000
+    (temporary / "hyperparams.yaml").write_text(f"""sample_rate: 16000
 out_n_neurons: 15
 compute_features: !new:torch.nn.Identity
 mean_var_norm: !new:custom.WhisperLIDPassThrough
-embedding_model: !new:custom.WhisperTinyLIDEncoder
-classifier: !new:custom.WhisperTinyLIDClassifier
+embedding_model: !new:custom.WhisperLIDEncoder
+    n_mels: {dims["n_mels"]}
+    n_ctx: {dims["n_audio_ctx"]}
+    n_state: {dims["n_audio_state"]}
+    n_head: {dims["n_audio_head"]}
+    n_layer: {dims["n_audio_layer"]}
+classifier: !new:custom.WhisperLIDClassifier
+    n_state: {dims["n_audio_state"]}
     outputs: !ref <out_n_neurons>
 label_encoder: !new:speechbrain.dataio.encoder.CategoricalEncoder
 modules:
@@ -79,12 +98,12 @@ pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
 """)
     (
         temporary / "README.md"
-    ).write_text(f"""# Whisper tiny fifteen-language LID ({method})
+    ).write_text(f"""# Whisper {model_name} fifteen-language LID ({method})
 
 ```python
 from speechbrain.inference.classifiers import EncoderClassifier
 model = EncoderClassifier.from_hparams(
-    source="/path/to/whisper_tiny15_{method}",
+    source="/path/to/whisper_{model_name}15_{method}",
     savedir="/tmp/whisper15_{method}_loaded",
     run_opts={{"device": "cpu"}},  # cuda also supported
 )
@@ -106,6 +125,8 @@ Runtime versions and checksums are recorded in export.json.
     write_json(
         temporary / "export.json",
         {
+            "model": model_name,
+            "dims": dims,
             "source_checkpoint_sha256": calibration["model_sha256"],
             "method": method,
             "epoch": saved["epoch"],
@@ -229,7 +250,10 @@ def export_models(study):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     for method in ["frozen", "finetuned"]:
-        output = Path(f"artifacts/deployment/whisper_tiny15_{method}")
+        model_name = json.loads((study.root / "model_identity.json").read_text()).get(
+            "model", "tiny"
+        )
+        output = Path(f"artifacts/deployment/whisper_{model_name}15_{method}")
         export_one(study, method, output)
         if not (output / "verification.json").exists():
             verify(study, method, output)

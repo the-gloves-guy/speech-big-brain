@@ -16,3 +16,5 @@ data/
 .ruff_cache/
 RemoteAccess.md
 validation_clips/
+.ipynb_checkpoints/
+chrome_profile/

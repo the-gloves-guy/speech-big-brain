@@ -20,7 +20,6 @@ def run(study, original):
         codes=CODES,
         selection_cohorts=["vox_validation", "new_selection"],
     )
-    duration, gain, predictions_table = [], [], []
     models = {}
     for method in ["frozen", "finetuned"]:
         adapter = ExtensionAdapter(study.root, study.root / method / "model.pt")
@@ -74,6 +73,11 @@ def run(study, original):
             (study.base / method / "calibration.json").read_text()
         )["temperature"]
         models[method] = (values, CODES[:12], temperature)
+    summarize(directory, rows, models)
+
+
+def summarize(directory, rows, models):
+    duration, gain, predictions_table = [], [], []
     for method, (scores, codes, temperature) in models.items():
         predicted = np.array([codes[i] for i in scores.argmax(1)])
         confidence = softmax(scores.astype(float) / temperature, axis=1).max(1)
