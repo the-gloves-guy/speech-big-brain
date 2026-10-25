@@ -4,7 +4,6 @@ import csv
 import gc
 import hashlib
 import json
-from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -177,10 +176,10 @@ def infer(rows, output):
     return scores
 
 
-def evaluate(root, destination, min_seconds=3):
+def evaluate(root, destination, min_seconds=3, languages=None):
     output = Path(destination).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    rows, prepared = prepare(root, output, min_seconds=min_seconds)
+    rows, prepared = prepare(root, output, min_seconds=min_seconds, languages=languages)
     write_json(output / "status.json", {"phase": "inference", "segments": len(rows)})
     scores = infer(rows, output)
     predicted, probabilities = {}, {}
@@ -197,6 +196,7 @@ def evaluate(root, destination, min_seconds=3):
         own["ece_raw"] = score_segments(rows, predicted[name], raw_confidence)["ece"]
         reports[name] = {
             "display_name": display_name,
+            "codes": list(codes),
             "supports_new_languages": set(TARGETS).issubset(codes),
             "temperature": temperature,
             "conditional": own,
@@ -333,14 +333,17 @@ def evaluate(root, destination, min_seconds=3):
             csv.writer(stream).writerow(
                 [*annotation_rows[0], "frozen15", "partial15", "review_reasons"]
             )
-    write_report(output, rows, prepared, reports)
+    report_path = write_report(output, rows, prepared, reports)
+    from .speaker_study import resources
+
+    write_json(output / "resources.json", resources())
     write_json(
         output / "status.json",
         {
             "phase": "complete",
             "segments": len(rows),
             "sources": len(prepared["source_summaries"]),
-            "report": "reports/youtube_validation/held_out_evaluation.md",
+            "report": str(report_path),
         },
     )
     print(
@@ -374,324 +377,9 @@ def write_csv(path, rows):
 
 
 def write_report(output, rows, prepared, reports):
-    import matplotlib
+    from .youtube_report import write_report as render
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    destination = Path("reports/youtube_validation")
-    figures = destination / "figures"
-    figures.mkdir(parents=True, exist_ok=True)
-    plt.rcParams.update(
-        {
-            "font.family": "DejaVu Sans",
-            "font.size": 10,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "pdf.fonttype": 42,
-            "svg.fonttype": "none",
-        }
-    )
-    colors = ["#0072B2", "#D55E00"]
-    primary = ["frozen15", "partial15"]
-
-    def save(fig, name):
-        for extension in ("png", "pdf", "svg"):
-            fig.savefig(figures / f"{name}.{extension}", dpi=350, bbox_inches="tight")
-        plt.close(fig)
-
-    fig, axes = plt.subplots(1, 2, figsize=(9, 3.8), layout="constrained")
-    for offset, model, color in zip((-0.17, 0.17), primary, colors):
-        values = reports[model]["conditional"]["by_language"]
-        for ax, metric in zip(axes, ("accuracy", "coverage")):
-            bars = [
-                values[code][metric] * 100
-                if values[code][metric] is not None
-                else np.nan
-                for code in TARGETS
-            ]
-            ax.bar(
-                np.arange(3) + offset,
-                bars,
-                width=0.32,
-                color=color,
-                label=MODELS[model],
-            )
-            for index, value in enumerate(bars):
-                if np.isfinite(value):
-                    ax.text(
-                        index + offset,
-                        value + 1.2,
-                        f"{value:.1f}",
-                        ha="center",
-                        fontsize=8,
-                    )
-        axes[0].set(
-            title="Folder-label accuracy, English excluded",
-            ylabel="Conditional accuracy (%)",
-        )
-        axes[1].set(title="Segments retained for scoring", ylabel="Coverage (%)")
-    for ax in axes:
-        ax.set_xticks(range(3), ["Samoan", "Niuean", "Tongan"])
-        ax.set_ylim(0, 112)
-        ax.set_axisbelow(True)
-        ax.grid(axis="y", alpha=0.2)
-    handles, legend_labels = axes[1].get_legend_handles_labels()
-    fig.legend(
-        handles,
-        legend_labels,
-        frameon=False,
-        loc="lower center",
-        bbox_to_anchor=(0.5, -0.075),
-        ncol=2,
-        fontsize=9,
-    )
-    save(fig, "accuracy_and_coverage")
-
-    fig, ax = plt.subplots(figsize=(9, 4.5), layout="constrained")
-    sources = prepared["source_summaries"]
-    labels = []
-    counts = Counter()
-    for source in sources:
-        counts[source["language"]] += 1
-        labels.append(f"{source['language']} clip {counts[source['language']]}")
-    for offset, model, color in zip((-0.1, 0.1), primary, colors):
-        values = reports[model]["conditional"]["by_source"]
-        ax.scatter(
-            [
-                100 * values[source["source_id"]]["accuracy"]
-                if values[source["source_id"]]["accuracy"] is not None
-                else np.nan
-                for source in sources
-            ],
-            np.arange(len(sources)) + offset,
-            color=color,
-            label=MODELS[model],
-            s=45,
-        )
-    ax.set_yticks(range(len(sources)), labels)
-    ax.invert_yaxis()
-    ax.set(
-        xlim=(-2, 105),
-        xlabel="Conditional folder-label accuracy (%)",
-        title="Results by original source clip",
-    )
-    ax.grid(axis="x", alpha=0.2)
-    ax.legend(frameon=False)
-    save(fig, "per_source")
-
-    def pct(value):
-        return "—" if value is None else f"{100 * value:.2f}"
-
-    main_rows, common_rows, language_rows, control_rows = [], [], [], []
-    for name in primary:
-        value = reports[name]["conditional"]
-        main_rows.append(
-            f"| {MODELS[name]} | {value['segments_total']} | {value['english_predictions']} | {value['segments_scored']} | {pct(value['coverage'])} | {pct(value['accuracy'])} | {pct(value['macro_precision'])} | {pct(value['macro_recall'])} | {pct(value['macro_f1'])} |"
-        )
-        shared = reports[name]["common_cohort"]
-        common_rows.append(
-            f"| {MODELS[name]} | {shared['segments_scored']} | {pct(shared['accuracy'])} | {pct(shared['macro_f1'])} | {pct(shared['mean_source_accuracy'])} |"
-        )
-        for code, counts in value["by_language"].items():
-            language_rows.append(
-                f"| {MODELS[name]} | {code} | {counts['total']} | {counts['english']} | {counts['scored']} | {pct(counts['accuracy'])} |"
-            )
-    for name in ("original107", "filtered12", "previous12"):
-        value = reports[name]["conditional"]
-        top = ", ".join(
-            f"{code}: {n}"
-            for code, n in sorted(
-                value["prediction_counts_all"].items(), key=lambda item: -item[1]
-            )[:4]
-        )
-        control_rows.append(
-            f"| {MODELS[name]} | {value['english_predictions']} | {value['segments_scored']} | {top} |"
-        )
-    source_rows = [
-        f"| {Path(value['source']).name} | {value['language']} | {value['decoded_seconds']:.1f} | {value['retained_segments']} | {value['retained_seconds']:.1f} | {value['dropped_short_regions']} |"
-        for value in sources
-    ]
-    confusions = []
-    for name in primary:
-        counts = reports[name]["conditional"]["confusion_scored"]
-        pairs = sorted(
-            [
-                (count, truth, prediction)
-                for truth, values in counts.items()
-                for prediction, count in values.items()
-                if prediction != truth
-            ],
-            reverse=True,
-        )
-        confusions.extend(
-            f"| {MODELS[name]} | {truth} | {prediction} | {count} |"
-            for count, truth, prediction in pairs[:5]
-        )
-    calibration = [
-        f"| {MODELS[name]} | {pct(reports[name]['conditional']['ece_raw'])} | {pct(reports[name]['conditional']['ece'])} | {reports[name]['temperature']:.3f} |"
-        for name in primary
-    ]
-    minimum = prepared["configuration"]["minimum_seconds"]
-    total_seconds = sum(source["decoded_seconds"] for source in sources)
-    kept_seconds = sum(row["duration"] for row in rows)
-    dropped = sum(source["dropped_short_regions"] for source in sources)
-    frozen = reports["frozen15"]["conditional"]
-    partial = reports["partial15"]["conditional"]
-    common_frozen = reports["frozen15"]["common_cohort"]
-    common_partial = reports["partial15"]["common_cohort"]
-    language_names = {"sam": "Samoan", "niu": "Niuean", "ton": "Tongan"}
-    weakest = sorted(
-        TARGETS,
-        key=lambda code: np.mean(
-            [
-                report["conditional"]["by_language"][code]["accuracy"]
-                for report in (reports["frozen15"], reports["partial15"])
-                if report["conditional"]["by_language"][code]["accuracy"] is not None
-            ]
-        ),
-    )
-    priority = " and ".join(language_names[code] for code in weakest[:2])
-    findings = (
-        f"- **Conditional accuracy is {pct(frozen['accuracy'])}% (frozen) and {pct(partial['accuracy'])}% (partial)**, compared with about 99.7–99.8% on the radio-news new-language holdout. These datasets/protocols differ, so this does not isolate the cause of the difference.\n"
-        f"- **English exclusions:** {frozen['english_predictions']} / {partial['english_predictions']} segments. On the identical {common_frozen['segments_scored']}-segment cohort, accuracy is {pct(common_frozen['accuracy'])}% / {pct(common_partial['accuracy'])}%.\n"
-        f"- **Per-language accuracy:** Tongan {pct(frozen['by_language']['ton']['accuracy'])}% / {pct(partial['by_language']['ton']['accuracy'])}%; Niuean {pct(frozen['by_language']['niu']['accuracy'])}% / {pct(partial['by_language']['niu']['accuracy'])}%; Samoan {pct(frozen['by_language']['sam']['accuracy'])}% / {pct(partial['by_language']['sam']['accuracy'])}% (frozen / partial).\n"
-        f"- **Equal weighting of source clips gives lower accuracy:** {pct(frozen['mean_source_accuracy'])}% / {pct(partial['mean_source_accuracy'])}%. Long, easier clips can raise pooled accuracy while performance on individual sources remains uneven.\n"
-        f"- **Prioritize review and independent evaluation sources for {priority}**, the weaker languages in this collection. Test noise/channel/reverberation augmentation as an ablation only if annotated errors support an acoustic mismatch. These results do not establish that augmentation alone will fix the difference.\n"
-    )
-    update_section = ""
-    previous_path = Path("artifacts/youtube_validation/report.json").resolve()
-    if previous_path.exists() and previous_path.parent != output.resolve():
-        previous = json.loads(previous_path.read_text())
-        update_rows = []
-        for name in primary:
-            before = previous["models"][name]["conditional"]
-            after = reports[name]["conditional"]
-            update_rows.append(
-                f"| {MODELS[name]} | {before['segments_total']} | {after['segments_total']} | {pct(before['accuracy'])} | {pct(after['accuracy'])} | {before['english_predictions']} | {after['english_predictions']} |"
-            )
-        update_section = (
-            "## Change from the original seven-clip evaluation\n\nSame model checkpoints and VAD settings; the evaluation corpus changed. Differences below reflect audio composition, not model improvement.\n\n| Model | Previous cuts | Updated cuts | Previous accuracy (%) | Updated accuracy (%) | Previous English | Updated English |\n|---|---:|---:|---:|---:|---:|---:|\n"
-            + "\n".join(update_rows)
-            + "\n\n[Previous report](../youtube_validation_previous_7clips/held_out_evaluation.md).\n"
-        )
-    length_rows = []
-    for name in primary:
-        for low, high in ((minimum, 5), (5, 8), (8, 10.001)):
-            if low >= high:
-                continue
-            selected = [
-                row
-                for row in read_prediction_rows(output / "predictions.csv")
-                if row["model"] == name
-                and low <= float(row["duration"]) < high
-                and row["excluded_english"] == "False"
-            ]
-            value = (
-                sum(row["folder_label_match"] == "True" for row in selected)
-                / len(selected)
-                if selected
-                else None
-            )
-            length_rows.append(
-                f"| {MODELS[name]} | {low:g}–{min(high, 10):g} | {len(selected)} | {pct(value)} |"
-            )
-    text = f"""# Held-out YouTube speech evaluation
-
-**Purpose:** screen for generalization beyond the radio-news training domain. These are **provisional directory-label metrics**, not a manually annotated conversational benchmark.
-
-## Key findings
-
-{findings}
-
-{update_section}
-
-## Data and segmentation
-
-- **{len(sources)} source clips**, {total_seconds / 60:.1f} minutes; folder labels `sam`, `niu`, `ton`. The directory spelling `Nuiean` maps to Niuean (`niu`). This is a mixed convenience sample; recording styles are not manually annotated.
-- Silero VAD {prepared["configuration"]["vad_version"]} on CPU; threshold 0.5, minimum silence 300 ms, padding 150 ms. [Model implementation](https://github.com/snakers4/silero-vad).
-- Decode one file at a time to mono 16 kHz float32. Keep contiguous **{minimum:g}–10 second** speech segments; split long regions evenly without overlap or concatenating distant speech. Discard regions below {minimum:g} seconds.
-- **{len(rows)} retained segments**, {kept_seconds / 60:.1f} minutes; **{dropped} short regions discarded**. Detailed VAD boundaries and discarded durations are saved per source.
-- No extra gain normalization, model fitting, augmentation, checkpoint selection, or temperature fitting used these clips. Apply previously fitted radio/FLEURS calibration once; raw/calibrated top-1 labels agree.
-
-| Source audio | Label | Duration (s) | Retained cuts | Retained (s) | Short regions dropped |
-|---|---|---:|---:|---:|---:|
-{chr(10).join(source_rows)}
-
-## English-excluded results
-
-- Count every top-1 **English prediction** separately and exclude it from that model's accuracy, precision, recall, F1 and ECE. Other predicted languages remain errors against the folder label.
-- **English predictions are not verified English speech.** A missed Pacific-language segment predicted English is excluded too; actual English predicted as a Pacific language can remain in the metrics. Mixed-language segments also have no verified language label.
-- Denominators therefore differ by model. Coverage and the same-cohort comparison below are essential for interpreting scores. Precision/recall/F1 are macro-averaged across target languages with retained ground-label examples; empty cohorts have undefined scores.
-
-| Model | Cuts | English excluded | Scored | Coverage (%) | Accuracy (%) | Precision (%) | Recall (%) | F1 (%) |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-{chr(10).join(main_rows)}
-
-![Conditional accuracy and scoring coverage](figures/accuracy_and_coverage.png)
-
-### Same-cohort comparison
-
-Exclude a segment if **either** 15-language model predicts English, then compare both on the identical remaining segments. This controls differences in model-specific exclusion sets; it does not establish their true language. Source accuracy is the unweighted mean of clip-level conditional accuracies for clips with retained segments.
-
-| Model | Common cuts | Accuracy (%) | Macro F1 (%) | Mean source accuracy (%) |
-|---|---:|---:|---:|---:|
-{chr(10).join(common_rows)}
-
-### By language and source
-
-| Model | Folder label | Cuts | English excluded | Scored | Accuracy (%) |
-|---|---|---:|---:|---:|---:|
-{chr(10).join(language_rows)}
-
-![Conditional performance for each original clip](figures/per_source.png)
-
-### Segment-duration diagnostic
-
-Descriptive scores after English exclusions; duration is another possible contributor to the gap and was not tuned using these results. Bins start at the configured minimum, with boundaries at 5, 8, and 10 seconds; upper boundaries are excluded except the final 10-second boundary.
-
-| Model | Duration (s) | Scored cuts | Accuracy (%) |
-|---|---:|---:|---:|
-{chr(10).join(length_rows)}
-
-### Largest non-English mismatches
-
-| Model | Folder label | Predicted | Segments |
-|---|---|---|---:|
-{chr(10).join(confusions)}
-
-### Calibration diagnostics
-
-ECE uses 15 equal-width bins on each model's non-English subset. These values are conditional and use provisional labels; they are not an unbiased calibration estimate for verified code-switched speech.
-
-| Model | Raw ECE (%) | Previously calibrated ECE (%) | Temperature |
-|---|---:|---:|---:|
-{chr(10).join(calibration)}
-
-### Older model controls
-
-The original 107-language, filtered 12-language, and previous fine-tuned 12-language classifiers **lack all three target outputs**. Their target-language accuracy/F1 is structurally zero on retained folder labels, so they are reference controls rather than competing recognition models. Their English counts and error-label distributions are still useful.
-
-| Control | English predictions | Non-English cuts | Most frequent predictions (all cuts) |
-|---|---:|---:|---|
-{chr(10).join(control_rows)}
-
-## Interpretation and next experiment
-
-- Compare conditional accuracy **with coverage and per-source results**, rather than treating all retained cuts as independent evidence. Source-file counts are {dict(Counter(source["language"] for source in sources))}; files do not establish independent speakers or videos, and short/long extracts may overlap. No narrow segment-level confidence intervals are reported.
-- The radio-held-out test previously gave approximately 99.7–99.8% accuracy on the three new languages. These YouTube scores use different audio, segment durations and English exclusions; the difference is a domain-shift diagnostic, not a controlled estimate of augmentation benefit.
-- Manually review English predictions, disagreements and non-English mismatches using the timestamped review queue before deciding which errors are acoustic domain shift versus label uncertainty or code switching.
-- If verified errors cluster around noise, room acoustics or recording channels, test corresponding augmentation as a controlled training ablation with old-language replay. If they cluster around conversational pronunciation or speaking style, prioritize additional independent conversational speakers. Keep these evaluation sources held out from that training.
-- Gain-only augmentation is unlikely to resolve a speaking-style mismatch by itself; the prior Samoan validation gain probe showed nearly invariant embeddings under uniform gain changes. This is a working hypothesis to test, not a measured augmentation result.
-
-## Artifacts
-
-- [Summary CSV](../../{output.relative_to(Path.cwd())}/summary.csv) · [Per-language CSV](../../{output.relative_to(Path.cwd())}/per_language.csv) · [Per-source CSV](../../{output.relative_to(Path.cwd())}/per_source.csv).
-- [Every prediction and probability](../../{output.relative_to(Path.cwd())}/predictions.csv) · [Full report JSON](../../{output.relative_to(Path.cwd())}/report.json).
-- [Review queue](../../{output.relative_to(Path.cwd())}/review_queue.csv) · [Annotation template](../../{output.relative_to(Path.cwd())}/annotations_template.csv) · [Speech WAVs](../../{output.relative_to(Path.cwd())}/segments/).
-- Source/model/VAD hashes, exact boundaries and settings are recorded. Plots are 350 dpi PNG plus vector PDF and SVG.
-"""
-    (destination / "held_out_evaluation.md").write_text(text)
+    return render(output, rows, prepared, reports)
 
 
 def read_prediction_rows(path):

@@ -17,6 +17,7 @@ dependencies = [
   "matplotlib>=3.8",
   "silero-vad==6.2.3",
   "umap-learn==0.5.9.post2",
+  "openai-whisper==20250625",
 ]
 
 [project.scripts]

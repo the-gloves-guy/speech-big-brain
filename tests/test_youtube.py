@@ -99,3 +99,55 @@ def test_duration_weighting_and_source_balance_are_separate():
     assert result["accuracy"] == pytest.approx(2 / 3)
     assert result["mean_source_accuracy"] == 0.75
     assert result["duration_weighted_accuracy"] == pytest.approx(8 / 12)
+
+
+def test_inventory_requires_requested_hindi_and_thai_and_includes_them(tmp_path):
+    for directory in ["Samoan", "Nuiean", "Tongan", "Hindi", "Thai"]:
+        folder = tmp_path / directory
+        folder.mkdir()
+        (folder / "audio.wav").write_bytes(directory.encode())
+    data = inventory(tmp_path, languages=["sam", "niu", "ton", "hi", "th"])
+    assert len(data) == 5
+    assert {r["language"] for r in data} == {"sam", "niu", "ton", "hi", "th"}
+    (tmp_path / "Thai/audio.wav").unlink()
+    with pytest.raises(ValueError, match="requested languages"):
+        inventory(tmp_path, languages=["sam", "niu", "ton", "hi", "th"])
+
+
+def test_hindi_and_thai_enter_macro_metrics_and_wrong_outputs_remain_errors():
+    result = score_segments(rows(["hi", "th"]), ["sam", "th"], [0.9, 0.8])
+    assert result["accuracy"] == 0.5
+    assert result["macro_languages"] == ["hi", "th"]
+    assert result["macro_recall"] == 0.5
+    assert result["per_language"]["hi"]["recall"] == 0
+    assert result["per_language"]["th"]["recall"] == 1
+
+
+def test_all_segment_policy_counts_english_as_error_without_exclusions():
+    result = score_segments(
+        rows(["hi", "th"]), ["hi", "en"], [0.9, 0.9], exclude_english=False
+    )
+    assert result["segments_scored"] == 2 and result["coverage"] == 1
+    assert result["english_predictions"] == 1
+    assert result["accuracy"] == 0.5
+    empty = score_segments(
+        rows(["hi", "th"]), ["en", "en"], [0.9, 0.9], exclude_english=False
+    )
+    assert empty["accuracy"] == 0 and empty["macro_f1"] == 0
+
+
+def test_group_common_cohort_uses_supported_models_only():
+    from lid.youtube_report import summarize_groups
+
+    data = rows(["hi", "th", "sam", "ton"])
+    predicted = {"new15": ["hi", "th", "sam", "ton"], "old12": ["hi", "en", "hi", "hi"]}
+    confidence = {name: [0.9] * 4 for name in predicted}
+    codes = {"new15": ["hi", "th", "sam", "niu", "ton"], "old12": ["hi", "th", "en"]}
+    result = summarize_groups(data, predicted, confidence, codes)
+    assert result["original_sample"]["old12"]["supported"]
+    assert result["original_sample"]["new15"]["all_segments"]["segments_total"] == 2
+    assert result["original_sample"]["new15"]["common_cohort"]["segments_scored"] == 1
+    assert result["original_sample"]["old12"]["common_cohort"]["segments_scored"] == 1
+    assert not result["pacific"]["old12"]["supported"]
+    assert result["pacific"]["old12"]["all_segments"] is None
+    assert result["pacific"]["new15"]["common_cohort"]["segments_scored"] == 2

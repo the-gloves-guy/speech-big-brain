@@ -1,6 +1,7 @@
 """Evaluate the existing models on VAD-filtered held-out YouTube clips."""
 
 import argparse
+import fcntl
 import os
 import sys
 
@@ -10,6 +11,9 @@ def main():
     parser.add_argument("--root", default="validation_clips")
     parser.add_argument("--output", default="artifacts/youtube_validation")
     parser.add_argument("--min-seconds", type=float, default=3.0)
+    parser.add_argument(
+        "--languages", nargs="+", choices=["sam", "niu", "ton", "hi", "th"]
+    )
     args = parser.parse_args()
     if not 0 < args.min_seconds <= 5:
         parser.error(
@@ -32,7 +36,9 @@ def main():
 
     torch.set_num_threads(2)
     try:
-        evaluate(args.root, args.output, args.min_seconds)
+        with open("/tmp/lid-speaker-pilot-gpu.lock", "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            evaluate(args.root, args.output, args.min_seconds, languages=args.languages)
     except BaseException as error:
         from pathlib import Path
 

@@ -33,6 +33,127 @@ def cached(split):
 def main():
     import sys
 
+    if "--whisper" in sys.argv or "--whisper15" in sys.argv:
+        import subprocess
+
+        extension = "--whisper15" in sys.argv
+        directory = Path(
+            "artifacts/whisper_tiny15" if extension else "artifacts/whisper_tiny12"
+        )
+        result = {}
+        for key, filename in (
+            ("current", "status.json"),
+            ("comparison", "comparison_progress.json"),
+            ("preflight", "implementation_preflight.json"),
+        ):
+            path = directory / filename
+            if path.exists():
+                result[key] = json.loads(path.read_text())
+        result["training_complete"] = [
+            str(path.relative_to(directory))
+            for path in sorted(directory.glob("*/training_complete.json"))
+        ]
+        result["evaluation_complete"] = [
+            str(path.relative_to(directory))
+            for path in sorted(directory.glob("*/evaluation_complete.json"))
+        ]
+        result["cache_shards"] = {
+            name: len(list((directory / "cache" / name / "parts").glob("part-*.npz")))
+            for name in (
+                "vox_train",
+                "vox_validation",
+                "fleurs_validation",
+                "fleurs_test",
+                "external",
+                *(
+                    ["new_train", "new_selection", "new_calibration", "new_test"]
+                    if extension
+                    else []
+                ),
+            )
+        }
+        worker = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "lid-whisper15.service" if extension else "lid-whisper12.service",
+                "-p",
+                "ActiveState",
+                "-p",
+                "SubState",
+                "-p",
+                "NRestarts",
+                "-p",
+                "MemoryCurrent",
+                "-p",
+                "MemoryMax",
+                "-p",
+                "MemorySwapMax",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result["worker"] = dict(
+            line.split("=", 1) for line in worker.stdout.splitlines() if "=" in line
+        )
+        print(json.dumps(result, indent=2))
+        return
+
+    if "--speaker-split" in sys.argv:
+        directory = Path("artifacts/speaker_split")
+        result = {}
+        for key, filename in (
+            ("current", "status.json"),
+            ("split_audit", "split_audit.json"),
+            ("embedding_ready", "embedding_ready.json"),
+        ):
+            path = directory / filename
+            if path.exists():
+                result[key] = json.loads(path.read_text())
+        import subprocess
+
+        service = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "lid-speaker-split.service",
+                "-p",
+                "ActiveState",
+                "-p",
+                "SubState",
+                "-p",
+                "NRestarts",
+                "-p",
+                "MemoryCurrent",
+                "-p",
+                "MemoryMax",
+                "-p",
+                "MemorySwapMax",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result["worker"] = dict(
+            line.split("=", 1) for line in service.stdout.splitlines() if "=" in line
+        )
+        result["speaker_shards_completed"] = len(
+            list((directory / "speaker_parts").glob("part-*.npz"))
+        )
+        result["training_complete"] = [
+            str(p.relative_to(directory))
+            for p in sorted((directory / "runs").glob("*/*/complete.json"))
+        ]
+        result["external_scoring_complete"] = [
+            str(p.relative_to(directory))
+            for p in sorted((directory / "runs").glob("*/*/external/logits.npz"))
+        ]
+        print(json.dumps(result, indent=2))
+        return
+
     if "--speakers" in sys.argv:
         import subprocess
 

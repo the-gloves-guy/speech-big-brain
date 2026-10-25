@@ -333,21 +333,33 @@ or model/data identities are rejected rather than silently reused.
 
 ## Held-out YouTube validation with VAD
 
+Future experiments use the original recording-based training sets and the canonical
+models under `artifacts/full_run` and `artifacts/extension15`. Speaker-separation
+training is stopped and is historical; do not resume it unless explicitly requested.
+The persistent preference is recorded in `AGENTS.md`.
+
 ```bash
-uv run python scripts/evaluate_youtube.py --min-seconds 3 --output artifacts/youtube_validation_v2
+uv run python scripts/evaluate_youtube.py --min-seconds 3 --languages sam niu ton hi th --output artifacts/youtube_validation_v3
 ```
 
 This runs under a 3 GiB systemd RAM cap with swap disabled. It reads WAVs and MP3s from
-`validation_clips/Samoan`, `validation_clips/Tongan`, and `validation_clips/Nuiean`
-(the spelling `Niuean` is also accepted). Originals and model weights are read
+`validation_clips/Samoan`, `validation_clips/Tongan`, `validation_clips/Nuiean`,
+`validation_clips/Hindi`, and `validation_clips/Thai` (the spelling `Niuean` is also
+accepted). The explicit `--languages` option requires audio for every requested
+language; omit it for a Pacific corpus with optional Hindi/Thai sources. Originals and model weights are read
 only. Decode one file at a time; Silero VAD 6.2.3 runs on CPU. Speech regions
 shorter than 3 seconds are discarded, while longer regions are split evenly
 into non-overlapping segments of at most 10 seconds. Durations include VAD
 padding. No added level normalization or test-set fitting is performed.
 
 Both 15-language models are evaluated. Original-107, filtered-12 and previous
-fine-tuned-12 models are included as reference controls; they lack all three
-new-language outputs and cannot recognize these target labels.
+fine-tuned-12 models are included as reference controls. They support Hindi and
+Thai but lack the three Pacific outputs; unsupported group comparisons are marked
+accordingly. Group results separate Hindi/Thai from Pacific languages. All-segment
+metrics count English predictions as errors against the folder labels; the original
+English-excluded metrics and same-cohort comparisons are also retained. In-domain
+FLEURS/radio comparisons use the same checkpoint weights, with differing audio
+populations and protocols explicitly identified.
 
 For each model, top-1 English predictions are counted (including seconds and
 source/language breakdowns) and excluded from accuracy, precision, recall, F1
@@ -363,18 +375,22 @@ With few source clips per language, many slices do not constitute many
 independent speakers or videos; short/long extracts can also overlap. The report describes these limitations and a timestamped
 review queue supports manual annotation.
 
-- Report and publication figures: `reports/youtube_validation/held_out_evaluation.md`.
-- Current expanded-corpus artifacts: `artifacts/youtube_validation_v2/`, including full predictions and
+- Expanded report and figures: `reports/youtube_validation_v3/held_out_evaluation.md`.
+- Current expanded-corpus artifacts: `artifacts/youtube_validation_v3/`, including group/domain comparisons, full predictions and
   probabilities, model/source/VAD hashes, VAD boundaries, extracted WAVs,
   conditional and common-cohort metrics, per-source results and annotation CSVs.
-- Runtime log: `artifacts/youtube_evaluation_v2.log`; phase: the artifact directory's
+- Runtime log: `artifacts/youtube_evaluation_v3.log`; phase: the artifact directory's
   `status.json`. Cached embeddings are fingerprinted by model and segment data.
 - Use a fresh `--output` directory when changing source clips or VAD/minimum
   duration settings. Report regeneration reads the saved results without fitting.
+- The earlier Pacific-only expanded corpus remains in `artifacts/youtube_validation_v2/`.
 - The original seven-clip artifacts remain in `artifacts/youtube_validation/`;
   their report and figures are preserved in `reports/youtube_validation_previous_7clips/`.
 
-## Pacific speaker and embedding study
+## Pacific speaker and embedding study (historical)
+
+Speaker-separated training is stopped. The commands below describe the historical
+study; future LID experiments use the original recording-based splits.
 
 ```bash
 uv run python scripts/run_speaker_study.py
@@ -405,3 +421,150 @@ uv run python scripts/progress.py --speakers
 - [Pretrained architecture](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa/blob/main/hyperparams.yaml)
 - [FLEURS dataset](https://huggingface.co/datasets/google/fleurs)
 - [Temperature scaling and ECE](https://proceedings.mlr.press/v70/guo17a.html)
+
+## Whisper tiny twelve-language comparison
+
+The current study uses multilingual **Whisper tiny**, pinned to
+`openai-whisper==20250625` and its registered SHA-256 checkpoint. It retains the
+original 204,234 VoxLingua training clips, 23,607 recording-held-out checkpoint
+selection clips, 4,172 FLEURS calibration clips and 8,519 FLEURS test clips,
+including their original IDs and ordering. No speaker separation is used.
+
+```bash
+uv sync --locked
+uv run python scripts/run_whisper12.py --background
+uv run python scripts/progress.py --whisper
+systemctl --user status lid-whisper12.service
+```
+
+The persistent user service runs sequential GPU jobs with 4 GiB host RAM,
+zero swap, two CPU equivalents and two Torch/BLAS threads. Training has a
+microbatch-two backward preflight, falls back to one if necessary, and enforces
+a sub-7 GiB GPU budget. Checkpoints resume optimizer steps; feature and prediction
+caches resume from immutable, fingerprinted shards. Changing the configuration,
+model or cohort requires a fresh root. Manual service stop prevents automatic
+restart; failures have bounded retries.
+
+Approaches:
+
+- **Filtering:** original first-token Whisper language logits, filtered to the
+  twelve selected codes and renormalized with softmax. Report native-language
+  Whisper as a separate reference. Canonical language columns are explicitly
+  sorted by code to avoid tokenizer iteration-order changes between processes.
+- **Frozen encoder:** concatenate mean and population standard deviation of real
+  encoder positions, followed by LayerNorm and a 512-unit/twelve-output classifier.
+  Padding positions are excluded from pooling. Match the existing SpeechBrain
+  head's weighted-loss/full-epoch schedule; head architecture and initialization
+  still differ between families.
+- **Full encoder fine-tuning:** start from the best frozen head and pretrained
+  encoder, update all encoder parameters plus the head. An additional genuine
+  twelve-output SpeechBrain full-encoder model uses the same example draws and
+  update budget; the historical fifteen-output partial-tail model is not used as
+  an equivalent twelve-output reference. SpeechBrain BN running statistics stay
+  fixed for microbatch stability.
+
+All models receive at most ten real seconds of mono 16 kHz audio. Whisper adds
+its required right-zero-padding to thirty seconds; it does not receive additional
+real speech. Frontend calculation stays FP32 during AMP encoder training. Model
+selection uses only VoxLingua validation NLL. Temperature fits use only FLEURS
+validation, never FLEURS test or external clips.
+
+FLEURS comparisons include accuracy, macro/weighted precision, recall and F1,
+raw/calibrated ECE, NLL, Brier scores, out-of-set guesses and per-language confusion
+matrices. Existing SpeechBrain results are recomputed and checked from archived
+reference logits. The latest external VAD snapshot is shared exactly: Hindi/Thai
+have recognition metrics, English-excluded and all-segment policies plus a shared
+cohort. Pacific clips are **out-of-set diagnostics**, since the requested twelve
+outputs cannot represent Samoan, Niuean or Tongan. No forced-choice accuracy is
+presented as Pacific recognition performance.
+
+After training, compare nested 3/5/10-second excerpts from matched real ten-second
+speech windows and a ±12 dB, clipping-capped gain probe using only original
+VoxLingua checkpoint-selection audio. Diagnostic CSVs retain source references.
+
+- Configuration: `configs/whisper12.json`.
+- Artifacts and progress: `artifacts/whisper_tiny12/`; log: `pipeline.log`.
+- Evolving report: `reports/whisper_tiny12/whisper_comparison.md`.
+- Real-model implementation checks: `artifacts/whisper_tiny12/implementation_preflight.json`.
+- The separate `artifacts/whisper_tiny12_smoke/` cohorts verify implementation only;
+  their deliberately tiny training results are excluded from the comparison.
+- Stages: `prepare`, `cache_eval`, `filtered`, `cache_train`, `frozen`,
+  `whisper_finetune`, `speechbrain_finetune`, `diagnostics`, `report`, or `all`.
+
+All original SpeechBrain artifacts, previous validation outputs and stopped
+speaker-split results are preserved.
+
+### Completed Whisper export
+
+The selected fine-tuned Whisper checkpoint is
+`artifacts/whisper_tiny12/whisper_finetuned/model.pt` (epoch 8). Its standalone
+SpeechBrain-compatible export is `artifacts/deployment/whisper_tiny12_finetuned/`,
+with a single portable `whisper_tiny12_finetuned.tar.gz` archive alongside it.
+
+```python
+from speechbrain.inference.classifiers import EncoderClassifier
+model = EncoderClassifier.from_hparams(
+    source="artifacts/deployment/whisper_tiny12_finetuned",
+    savedir="pretrained_models/whisper_tiny12_lid",
+    run_opts={"device": "cuda"},
+)
+log_probs, score, index, labels = model.classify_file("audio.wav")
+```
+
+Keep `custom.py` and all model files together. The bundled backend reproduces the
+Whisper frontend, automatic maximum-ten-second center crop, real-token pooling,
+and trained twelve-language head. Calibration is already folded into classifier
+weights. Runtime needs SpeechBrain and openai-whisper, but no project code or
+pretrained model download. This is the LID encoder/classifier export; native
+Whisper transcription loaders expect a different checkpoint with a text decoder.
+
+The export was verified offline after relocation against all 8,519 FLEURS test
+clips and 1,243 external validation segments, plus CPU, file and padded-batch API
+checks. `verification.json`, `export.json`, `SHA256SUMS` and the archive checksum
+record these checks. To reproduce the folder export use
+`scripts/export_whisper12.py --output /a/fresh/directory`.
+
+### Whisper tiny Pacific extension
+
+The separate `configs/whisper15.json` study appends `sam`, `niu`, `ton` to the
+original twelve labels. Both options start from the selected frozen Whisper12
+classifier with identical seeded new output rows. `frozen` trains the classifier;
+`finetuned` updates the entire Whisper audio encoder and classifier. Both use the
+original recording-based VoxLingua/Pacific splits and the SpeechBrain15 balanced
+sample order, 32,768 draws per epoch, effective batch 32, at most 20 epochs and
+patience 5. Selection uses combined 15-class macro F1, then balanced NLL.
+
+```bash
+uv run python scripts/run_whisper15.py --background
+uv run python scripts/progress.py --whisper15
+```
+
+Stages are `prepare`, `baselines`, `cache_all`, `frozen`, `finetuned`, `evaluate`,
+`diagnostics`, `export`, `report`, or `all` (default). The runner enforces 4 GiB
+host memory, zero swap and two CPU threads through systemd, shares the existing
+single-GPU lock and limits GPU use below 7 GiB. Completed cache shards and training
+state are resumable. After a failure, inspect `artifacts/whisper_tiny15/pipeline.log`,
+resolve the error, clear the failed unit with
+`systemctl --user reset-failed lid-whisper15.service`, and rerun the same command.
+Configuration, source manifests, initial weights and implementation fingerprints
+must match; changed inputs require fresh output directories.
+
+Validation v4 freezes all 24 current source files into identical segments for
+all twelve benchmark models. Its 1,336 segments include the 1,243 historical v3
+segments and 93 added Niuean segments. Historical comparisons verify exact
+decoded PCM samples and timestamps: float WAV creation timestamps can change
+file hashes without changing samples. External clips remain evaluation-only;
+joint temperature fitting uses only FLEURS validation and Pacific calibration.
+All 15 outputs remain enabled in original-language regression comparisons.
+
+On successful completion, the runner writes
+`reports/whisper_tiny15/whisper_extension.md` and
+`reports/youtube_validation_v4/held_out_evaluation.md`, plus detailed artifacts,
+histories, provenance, duration/gain diagnostics and PNG/PDF/SVG figures. Both
+deployment bundles under `artifacts/deployment/whisper_tiny15_{frozen,finetuned}`
+must pass relocated offline checks against complete test/external predictions
+before archives and checksums are finalized. Their bundled custom backend supports
+`EncoderClassifier.from_hparams(...)` without a transcription decoder, with joint
+temperature calibration folded once into the classifier. The study is complete
+only after all training, evaluation, diagnostics, export verification and report
+stages succeed; a running service does not indicate completed results.

@@ -1,0 +1,23 @@
+{
+  "protocol": 2,
+  "seed": 42,
+  "model": "tiny",
+  "whisper_version": "20250625",
+  "max_seconds": 10,
+  "whisper_window_seconds": 30,
+  "cache_batch": 2,
+  "pooling": "mean_and_population_std_over_real_audio_tokens",
+  "frozen_epochs": 30,
+  "frozen_batch": 256,
+  "head_lr": 0.0001,
+  "encoder_lr": 0.00001,
+  "weight_decay": 0.0001,
+  "patience": 5,
+  "finetune_epochs": 20,
+  "examples_per_epoch": 32768,
+  "effective_batch": 32,
+  "microbatch": 2,
+  "selection": "unweighted VoxLingua validation NLL",
+  "calibration": "FLEURS validation only",
+  "external": "artifacts/youtube_validation_v3"
+}

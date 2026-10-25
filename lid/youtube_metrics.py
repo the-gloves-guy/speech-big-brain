@@ -8,7 +8,7 @@ from sklearn.metrics import precision_recall_fscore_support
 from .youtube_data import TARGETS
 
 
-def score_segments(rows, predictions, confidence, mask=None):
+def score_segments(rows, predictions, confidence, mask=None, *, exclude_english=True):
     n = len(rows)
     if len(predictions) != n or len(confidence) != n:
         raise ValueError("Predictions and segment manifest differ in length")
@@ -17,11 +17,9 @@ def score_segments(rows, predictions, confidence, mask=None):
     confidence = np.array(confidence, dtype=float)
     if not np.isfinite(confidence).all() or np.any((confidence < 0) | (confidence > 1)):
         raise ValueError("Invalid confidence values")
-    eligible = (
-        predictions != "en"
-        if mask is None
-        else np.array(mask, dtype=bool) & (predictions != "en")
-    )
+    eligible = np.ones(n, dtype=bool) if mask is None else np.array(mask, dtype=bool)
+    if exclude_english:
+        eligible = eligible & (predictions != "en")
     if eligible.shape != (n,):
         raise ValueError("Wrong cohort shape")
     duration = np.array([row["duration"] for row in rows])

@@ -12,8 +12,16 @@ import soundfile as sf
 
 from .extension_data import file_hash, read_rows, write_json
 
-DIRECTORIES = {"Samoan": "sam", "Nuiean": "niu", "Niuean": "niu", "Tongan": "ton"}
-TARGETS = ["sam", "niu", "ton"]
+DIRECTORIES = {
+    "Samoan": "sam",
+    "Nuiean": "niu",
+    "Niuean": "niu",
+    "Tongan": "ton",
+    "Hindi": "hi",
+    "Thai": "th",
+}
+PACIFIC_TARGETS = ["sam", "niu", "ton"]
+TARGETS = [*PACIFIC_TARGETS, "hi", "th"]
 
 
 def speech_chunks(intervals, min_samples=48000, max_samples=160000):
@@ -44,9 +52,14 @@ def speech_chunks(intervals, min_samples=48000, max_samples=160000):
     return kept, dropped
 
 
-def inventory(root):
+def inventory(root, languages=None):
+    required = set(PACIFIC_TARGETS if languages is None else languages)
+    if not required or not required.issubset(TARGETS):
+        raise ValueError("Unsupported validation languages")
     rows, hashes = [], set()
     for directory, code in DIRECTORIES.items():
+        if languages is not None and code not in required:
+            continue
         for path in sorted((Path(root) / directory).glob("*")):
             if not path.is_file() or path.suffix.lower() not in {".mp3", ".wav"}:
                 continue
@@ -65,12 +78,14 @@ def inventory(root):
                     "mtime_ns": stat.st_mtime_ns,
                 }
             )
-    if {row["language"] for row in rows} != set(TARGETS):
-        raise ValueError("Need WAV/MP3 sources for Samoan, Niuean and Tongan")
+    if not required.issubset({row["language"] for row in rows}):
+        raise ValueError(
+            f"Need WAV/MP3 sources for requested languages: {sorted(required)}"
+        )
     return rows
 
 
-def prepare(root, output, min_seconds=3.0, max_seconds=10.0):
+def prepare(root, output, min_seconds=3.0, max_seconds=10.0, languages=None):
     import silero_vad
     import torch
     from silero_vad import get_speech_timestamps, load_silero_vad
@@ -78,9 +93,10 @@ def prepare(root, output, min_seconds=3.0, max_seconds=10.0):
     min_seconds, max_seconds = float(min_seconds), float(max_seconds)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    sources = inventory(root)
+    sources = inventory(root, languages)
     weights = Path(silero_vad.__file__).parent / "data/silero_vad.jit"
     configuration = {
+        "target_languages": sorted({r["language"] for r in sources}),
         "sample_rate": 16000,
         "minimum_seconds": min_seconds,
         "maximum_seconds": max_seconds,
@@ -126,7 +142,8 @@ def prepare(root, output, min_seconds=3.0, max_seconds=10.0):
         if summary_path.exists():
             saved = json.loads(summary_path.read_text())
             if saved["identity"] != identity or any(
-                not Path(row["path"]).is_file() for row in saved["segments"]
+                not Path(row["path"]).is_file() or file_hash(row["path"]) != row["sha256"]
+                for row in saved["segments"]
             ):
                 raise ValueError("Invalid partial VAD output")
             all_rows.extend(saved["segments"])
