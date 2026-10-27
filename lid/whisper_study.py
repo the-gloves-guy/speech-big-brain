@@ -58,12 +58,12 @@ class Study:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         if (
-            self.config["model"] not in ("tiny", "small")
+            self.config["model"] not in ("tiny", "small", "large-v3")
             or self.config["max_seconds"] != 10
             or self.config["whisper_window_seconds"] != 30
         ):
             raise ValueError(
-                "This matched protocol requires multilingual tiny or small and 10s real audio in a native 30s window"
+                "This matched protocol requires multilingual tiny, small or large-v3 and 10s real audio in a native 30s window"
             )
         bind(self.root / "configuration.json", self.config)
 
@@ -263,7 +263,7 @@ class Study:
                 features, logits = [], []
                 for offset in range(0, len(selected), self.config["cache_batch"]):
                     subset = selected[offset : offset + self.config["cache_batch"]]
-                    mels, lengths = mel_batch(subset)
+                    mels, lengths = mel_batch(subset, n_mels=model.dims.n_mels)
                     encoded = model.encoder(mels)
                     pooled = pool_real_tokens(encoded, lengths)
                     features.append(pooled.cpu().numpy())

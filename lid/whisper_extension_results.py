@@ -84,7 +84,7 @@ def plots(result, path, codes):
 
 
 def evaluate_models(study):
-    for method in ["frozen", "finetuned"]:
+    for method in getattr(study, "methods", ["frozen", "finetuned"]):
         directory = study.root / method
         if not (directory / "training_complete.json").exists():
             raise ValueError(f"Training incomplete: {method}")
@@ -361,8 +361,7 @@ def external_results(study):
         "whisper_frozen",
         "whisper_finetuned",
         "speechbrain_finetuned",
-        "frozen",
-        "finetuned",
+        *getattr(study, "methods", ["frozen", "finetuned"]),
     ]:
         directory = (
             study.root / method
@@ -378,6 +377,8 @@ def external_results(study):
             ] = (saved["logits"], saved["codes"].tolist(), calibration["temperature"])
     if hasattr(study, "additional_external_models"):
         models.update(study.additional_external_models())
+    if hasattr(study, "comparison_models"):
+        models = {name: models[name] for name in study.comparison_models}
     predictions = {
         m: np.array([codes[i] for i in logits.argmax(1)])
         for m, (logits, codes, _) in models.items()

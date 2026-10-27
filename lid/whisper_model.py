@@ -38,7 +38,7 @@ def pool_real_tokens(features, sample_counts):
     return torch.cat([mean, variance.clamp_min(1e-8).sqrt()], dim=-1)
 
 
-def mel_batch(rows, device="cuda"):
+def mel_batch(rows, device="cuda", n_mels=80):
     import whisper
 
     mels, sizes = [], []
@@ -51,7 +51,7 @@ def mel_batch(rows, device="cuda"):
         with torch.autocast(device_type=signal.device.type, enabled=False):
             mels.append(
                 whisper.log_mel_spectrogram(
-                    whisper.pad_or_trim(signal.float()), n_mels=80
+                    whisper.pad_or_trim(signal.float()), n_mels=n_mels
                 )
             )
     return torch.stack(mels), torch.tensor(sizes, device=device)
@@ -76,14 +76,31 @@ def load_whisper(root, device="cuda"):
             raise ValueError("Encoder checkpoint dimensions differ from identity")
         model = nn.Module()
         model.dims = SimpleNamespace(**dims)
-        model.encoder = AudioEncoder(
-            dims["n_mels"],
-            dims["n_audio_ctx"],
-            dims["n_audio_state"],
-            dims["n_audio_head"],
-            dims["n_audio_layer"],
-        )
-        model.encoder.load_state_dict(saved["encoder"])
+        if identity.get("bounded_memory_loading"):
+            # Allocate each tensor only once on the target device. A second full
+            # CPU model would exceed the Large v3 study's 4 GiB host budget.
+            with torch.device("meta"):
+                model.encoder = AudioEncoder(
+                    dims["n_mels"],
+                    dims["n_audio_ctx"],
+                    dims["n_audio_state"],
+                    dims["n_audio_head"],
+                    dims["n_audio_layer"],
+                )
+            state = {
+                k: v.to(device=device, dtype=torch.float32)
+                for k, v in saved["encoder"].items()
+            }
+            model.encoder.load_state_dict(state, assign=True)
+        else:
+            model.encoder = AudioEncoder(
+                dims["n_mels"],
+                dims["n_audio_ctx"],
+                dims["n_audio_state"],
+                dims["n_audio_head"],
+                dims["n_audio_layer"],
+            )
+            model.encoder.load_state_dict(saved["encoder"])
         return model.to(device).eval()
     return whisper.load_model(
         str(Path(root) / "pretrained" / f"{identity.get('model', 'tiny')}.pt"),
@@ -164,7 +181,7 @@ class Adapter:
 
     def embeddings(self, rows):
         if self.family == "whisper":
-            mels, lengths = mel_batch(rows)
+            mels, lengths = mel_batch(rows, n_mels=self.model.dims.n_mels)
             return pool_real_tokens(self.encoder(mels), lengths)
         from .extension_model import audio_batch
 

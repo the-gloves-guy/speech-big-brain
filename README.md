@@ -633,3 +633,41 @@ loading examples and checksums use `artifacts/deployment/whisper_small15_*`.
 Reports require completed test/external predictions and relocated offline export
 verification. A running worker or implemented report builder is not a finished
 Small experiment.
+
+## Whisper Large v3 frozen study
+
+```bash
+uv run python scripts/run_whisper_large_v3_15.py --background
+uv run python scripts/progress.py --whisper-large15
+```
+
+The Large v3 experiment trains a frozen twelve-language warm-start and expands
+its classifier to fifteen languages using the original recording splits and
+matched seed-42 balanced orders. It updates no encoder parameters. Feature
+extraction uses float32, 128 mel channels, native thirty-second padding and the
+same ten-second centre crop and real-token mean/std pooling as the Small study.
+The encoder is loaded without the transcription decoder; training checkpoints
+contain the classifier and a fingerprinted encoder reference, rather than a
+duplicate encoder. Existing Tiny, Small and SpeechBrain artifacts are preserved.
+
+Stages are `prepare_model`, `preflight`, `warm_cache`, `warm_train`,
+`warm_evaluate`, `prepare`, `cache_all`, `frozen`, `evaluate`, `baselines`,
+`diagnostics`, `export`, `report`, or `all`. The runner enforces 4 GiB host RAM,
+zero swap, two CPU threads and the shared single-GPU lock. The actual-checkpoint
+preflight tries inference batch two, then one; it verifies frozen encoder
+weights and a classifier optimizer step. A failed stage leaves atomic cache
+shards and resumable training state. Clear a failed service with
+`systemctl --user reset-failed lid-whisper-large-v3-15.service`, then rerun the
+same command. Configuration, model, frontend and data identity changes are
+rejected rather than silently reused.
+
+Outputs use `artifacts/whisper_large_v3_12` and
+`artifacts/whisper_large_v3_15`. The full evaluation compares SpeechBrain partial,
+Tiny frozen and Small frozen using verified matching test/external inputs and
+their unchanged calibration temperatures. External audio remains evaluation-only.
+Self-contained HTML/PDF analysis and PNG/PDF/SVG plots are written under
+`reports/whisper_large_v3_15`. The verified offline bundle and archive use
+`artifacts/deployment/whisper_large_v3_15_frozen`. The offline demo notebook
+includes an optional configuration for this bundle once export completes.
+Completion requires all training, evaluation, diagnostics, export verification
+and report markers; a running cache stage is not a completed study.

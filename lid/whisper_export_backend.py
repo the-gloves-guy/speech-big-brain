@@ -9,6 +9,12 @@ from whisper.audio import log_mel_spectrogram, pad_or_trim
 from whisper.model import AudioEncoder
 
 
+def load_whisper_encoder(module, path):
+    """Memory-map large encoder weights instead of duplicating them in host RAM."""
+    state = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
+    module.load_state_dict(state, strict=True, assign=True)
+
+
 class WhisperLIDPassThrough(nn.Module):
     def forward(self, waveforms, lengths=None):
         return waveforms
@@ -23,10 +29,22 @@ class WhisperTinyLIDEncoder(nn.Module):
         n_head=6,
         n_layer=4,
         max_samples=160000,
+        bounded_memory_loading=False,
     ):
         super().__init__()
-        self.encoder = AudioEncoder(n_mels, n_ctx, n_state, n_head, n_layer)
+        self.bounded_memory_loading = bounded_memory_loading
+        if bounded_memory_loading:
+            with torch.device("meta"):
+                self.encoder = AudioEncoder(n_mels, n_ctx, n_state, n_head, n_layer)
+        else:
+            self.encoder = AudioEncoder(n_mels, n_ctx, n_state, n_head, n_layer)
         self.max_samples = int(max_samples)
+        self.n_mels = n_mels
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        return super().load_state_dict(
+            state_dict, strict=strict, assign=assign or self.bounded_memory_loading
+        )
 
     def forward(self, waveforms, lengths=None):
         if waveforms.ndim == 1:
@@ -52,7 +70,9 @@ class WhisperTinyLIDEncoder(nn.Module):
             start = (count - size) // 2
             signal = signal[start : start + size].float()
             with torch.autocast(device_type=signal.device.type, enabled=False):
-                mels.append(log_mel_spectrogram(pad_or_trim(signal), n_mels=80))
+                mels.append(
+                    log_mel_spectrogram(pad_or_trim(signal), n_mels=self.n_mels)
+                )
             sample_counts.append(size)
         encoded = self.encoder(torch.stack(mels))
         counts = torch.tensor(sample_counts, device=encoded.device)

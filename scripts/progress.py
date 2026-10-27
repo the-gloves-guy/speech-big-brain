@@ -34,14 +34,23 @@ def main():
     import sys
 
     if any(
-        flag in sys.argv for flag in ["--whisper", "--whisper15", "--whisper-small15"]
+        flag in sys.argv
+        for flag in [
+            "--whisper",
+            "--whisper15",
+            "--whisper-small15",
+            "--whisper-large15",
+        ]
     ):
         import subprocess
 
         small = "--whisper-small15" in sys.argv
-        extension = "--whisper15" in sys.argv or small
+        large = "--whisper-large15" in sys.argv
+        extension = "--whisper15" in sys.argv or small or large
         directory = Path(
-            "artifacts/whisper_small15"
+            "artifacts/whisper_large_v3_15"
+            if large
+            else "artifacts/whisper_small15"
             if small
             else "artifacts/whisper_tiny15"
             if extension
@@ -56,20 +65,21 @@ def main():
             path = directory / filename
             if path.exists():
                 result[key] = json.loads(path.read_text())
-        if small:
+        if small or large:
+            warm_root = Path(
+                "artifacts/whisper_large_v3_12"
+                if large
+                else "artifacts/whisper_small12"
+            )
             for key, path in [
                 ("preflight", directory / "preflight.json"),
-                ("warm_start", Path("artifacts/whisper_small12/status.json")),
+                ("warm_start", warm_root / "status.json"),
             ]:
                 if path.exists():
                     result[key] = json.loads(path.read_text())
             result["warm_cache_shards"] = {
                 name: len(
-                    list(
-                        (Path("artifacts/whisper_small12/cache") / name / "parts").glob(
-                            "part-*.npz"
-                        )
-                    )
+                    list((warm_root / "cache" / name / "parts").glob("part-*.npz"))
                 )
                 for name in [
                     "vox_train",
@@ -107,7 +117,9 @@ def main():
                 "systemctl",
                 "--user",
                 "show",
-                "lid-whisper-small15.service"
+                "lid-whisper-large-v3-15.service"
+                if large
+                else "lid-whisper-small15.service"
                 if small
                 else "lid-whisper15.service"
                 if extension

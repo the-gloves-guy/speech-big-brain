@@ -48,16 +48,57 @@ def export_one(study, method, output):
         for name, checksum in meta["files_sha256"].items():
             if file_hash(output / name) != checksum:
                 raise ValueError("Existing export changed")
+        if (
+            identity.get("bounded_memory_loading")
+            and not (output / "verification.json").exists()
+        ):
+            # Repair only an unverified bundle's loader; evaluated weights and
+            # calibration remain byte-identical, and completed exports stay intact.
+            shutil.copyfile(
+                Path(__file__).with_name("whisper_export_backend.py"),
+                output / "custom.py",
+            )
+            yaml_path = output / "hyperparams.yaml"
+            yaml = yaml_path.read_text()
+            if "custom_hooks:" not in yaml:
+                yaml = yaml.replace(
+                    "pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer\n",
+                    "pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer\n    custom_hooks:\n        embedding_model: !name:custom.load_whisper_encoder\n",
+                )
+                yaml_path.write_text(yaml)
+            meta["memory_mapped_encoder_loading"] = True
+            meta["files_sha256"] = {
+                name: file_hash(output / name) for name in meta["files_sha256"]
+            }
+            write_json(output / "export.json", meta)
         return
     temporary = output.with_name(output.name + ".building")
     if temporary.exists():
         # Rebuild only our explicitly incomplete export; never modify completed bundles.
         shutil.rmtree(temporary)
     temporary.mkdir(parents=True)
-    torch.save(
-        {"encoder." + k: v for k, v in saved["encoder"].items()},
-        temporary / "embedding_model.ckpt",
-    )
+    if identity.get("bounded_memory_loading"):
+        from .model import cpu_state
+        from .whisper_model import load_whisper
+
+        if (
+            saved.get("encoder_checkpoint_sha256")
+            != identity["encoder_checkpoint_sha256"]
+        ):
+            raise ValueError("Frozen classifier references a different encoder")
+        model = load_whisper(study.root)
+        encoder_state = cpu_state(model.encoder)
+        torch.save(
+            {"encoder." + k: v for k, v in encoder_state.items()},
+            temporary / "embedding_model.ckpt",
+        )
+        del encoder_state, model
+        torch.cuda.empty_cache()
+    else:
+        torch.save(
+            {"encoder." + k: v for k, v in saved["encoder"].items()},
+            temporary / "embedding_model.ckpt",
+        )
     head = {k: v.clone() for k, v in saved["head"].items()}
     temperature = calibration["temperature"]
     head["3.weight"] /= temperature
@@ -71,6 +112,11 @@ def export_one(study, method, output):
     shutil.copyfile(
         Path(__file__).with_name("whisper_export_backend.py"), temporary / "custom.py"
     )
+    load_hook = (
+        "    custom_hooks:\n        embedding_model: !name:custom.load_whisper_encoder\n"
+        if identity.get("bounded_memory_loading")
+        else ""
+    )
     (temporary / "hyperparams.yaml").write_text(f"""sample_rate: 16000
 out_n_neurons: 15
 compute_features: !new:torch.nn.Identity
@@ -81,6 +127,7 @@ embedding_model: !new:custom.WhisperLIDEncoder
     n_state: {dims["n_audio_state"]}
     n_head: {dims["n_audio_head"]}
     n_layer: {dims["n_audio_layer"]}
+    bounded_memory_loading: {str(identity.get("bounded_memory_loading", False)).lower()}
 classifier: !new:custom.WhisperLIDClassifier
     n_state: {dims["n_audio_state"]}
     outputs: !ref <out_n_neurons>
@@ -91,7 +138,7 @@ modules:
     embedding_model: !ref <embedding_model>
     classifier: !ref <classifier>
 pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
-    loadables:
+{load_hook}    loadables:
         embedding_model: !ref <embedding_model>
         classifier: !ref <classifier>
         label_encoder: !ref <label_encoder>
@@ -103,7 +150,7 @@ pretrainer: !new:speechbrain.utils.parameter_transfer.Pretrainer
 ```python
 from speechbrain.inference.classifiers import EncoderClassifier
 model = EncoderClassifier.from_hparams(
-    source="/path/to/whisper_{model_name}15_{method}",
+    source="/path/to/{output.name}",
     savedir="/tmp/whisper15_{method}_loaded",
     run_opts={{"device": "cpu"}},  # cuda also supported
 )
