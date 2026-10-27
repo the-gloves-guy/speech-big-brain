@@ -1,0 +1,17 @@
+{
+  "protocol": 1,
+  "seed": 42,
+  "clusters": {"sam": 8, "niu": 7, "ton": 10},
+  "encoder": "wespeaker",
+  "reference_duration": "10",
+  "reference_linkage": "average",
+  "minimum_similarity": 0.35,
+  "minimum_margin": 0.05,
+  "minimum_seconds": 2.5,
+  "cross_language_similarity": 0.75,
+  "minimum_split_cuts": 50,
+  "pilot": "artifacts/speaker_pilot",
+  "previous_study": "artifacts/speaker_study",
+  "external": "artifacts/youtube_validation_v2",
+  "conditions": {"disjoint_uniform": "uniform", "disjoint_balanced": "speaker_balanced"}
+}

@@ -31,6 +31,264 @@ def cached(split):
 
 
 def main():
+    import sys
+
+    if any(
+        flag in sys.argv
+        for flag in [
+            "--whisper",
+            "--whisper15",
+            "--whisper-small15",
+            "--whisper-large15",
+        ]
+    ):
+        import subprocess
+
+        small = "--whisper-small15" in sys.argv
+        large = "--whisper-large15" in sys.argv
+        extension = "--whisper15" in sys.argv or small or large
+        directory = Path(
+            "artifacts/whisper_large_v3_15"
+            if large
+            else "artifacts/whisper_small15"
+            if small
+            else "artifacts/whisper_tiny15"
+            if extension
+            else "artifacts/whisper_tiny12"
+        )
+        result = {}
+        for key, filename in (
+            ("current", "status.json"),
+            ("comparison", "comparison_progress.json"),
+            ("preflight", "implementation_preflight.json"),
+        ):
+            path = directory / filename
+            if path.exists():
+                result[key] = json.loads(path.read_text())
+        if small or large:
+            warm_root = Path(
+                "artifacts/whisper_large_v3_12"
+                if large
+                else "artifacts/whisper_small12"
+            )
+            for key, path in [
+                ("preflight", directory / "preflight.json"),
+                ("warm_start", warm_root / "status.json"),
+            ]:
+                if path.exists():
+                    result[key] = json.loads(path.read_text())
+            result["warm_cache_shards"] = {
+                name: len(
+                    list((warm_root / "cache" / name / "parts").glob("part-*.npz"))
+                )
+                for name in [
+                    "vox_train",
+                    "vox_validation",
+                    "fleurs_validation",
+                    "fleurs_test",
+                    "external",
+                ]
+            }
+        result["training_complete"] = [
+            str(path.relative_to(directory))
+            for path in sorted(directory.glob("*/training_complete.json"))
+        ]
+        result["evaluation_complete"] = [
+            str(path.relative_to(directory))
+            for path in sorted(directory.glob("*/evaluation_complete.json"))
+        ]
+        result["cache_shards"] = {
+            name: len(list((directory / "cache" / name / "parts").glob("part-*.npz")))
+            for name in (
+                "vox_train",
+                "vox_validation",
+                "fleurs_validation",
+                "fleurs_test",
+                "external",
+                *(
+                    ["new_train", "new_selection", "new_calibration", "new_test"]
+                    if extension
+                    else []
+                ),
+            )
+        }
+        worker = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "lid-whisper-large-v3-15.service"
+                if large
+                else "lid-whisper-small15.service"
+                if small
+                else "lid-whisper15.service"
+                if extension
+                else "lid-whisper12.service",
+                "-p",
+                "ActiveState",
+                "-p",
+                "SubState",
+                "-p",
+                "NRestarts",
+                "-p",
+                "MemoryCurrent",
+                "-p",
+                "MemoryMax",
+                "-p",
+                "MemorySwapMax",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result["worker"] = dict(
+            line.split("=", 1) for line in worker.stdout.splitlines() if "=" in line
+        )
+        print(json.dumps(result, indent=2))
+        return
+
+    if "--speaker-split" in sys.argv:
+        directory = Path("artifacts/speaker_split")
+        result = {}
+        for key, filename in (
+            ("current", "status.json"),
+            ("split_audit", "split_audit.json"),
+            ("embedding_ready", "embedding_ready.json"),
+        ):
+            path = directory / filename
+            if path.exists():
+                result[key] = json.loads(path.read_text())
+        import subprocess
+
+        service = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "lid-speaker-split.service",
+                "-p",
+                "ActiveState",
+                "-p",
+                "SubState",
+                "-p",
+                "NRestarts",
+                "-p",
+                "MemoryCurrent",
+                "-p",
+                "MemoryMax",
+                "-p",
+                "MemorySwapMax",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result["worker"] = dict(
+            line.split("=", 1) for line in service.stdout.splitlines() if "=" in line
+        )
+        result["speaker_shards_completed"] = len(
+            list((directory / "speaker_parts").glob("part-*.npz"))
+        )
+        result["training_complete"] = [
+            str(p.relative_to(directory))
+            for p in sorted((directory / "runs").glob("*/*/complete.json"))
+        ]
+        result["external_scoring_complete"] = [
+            str(p.relative_to(directory))
+            for p in sorted((directory / "runs").glob("*/*/external/logits.npz"))
+        ]
+        print(json.dumps(result, indent=2))
+        return
+
+    if "--speakers" in sys.argv:
+        import subprocess
+
+        directory = Path("artifacts/speaker_study")
+        result = {}
+        for key, filename in (
+            ("current", "status.json"),
+            ("audit", "audit_complete.json"),
+            ("split_gate", "split_gate.json"),
+        ):
+            path = directory / filename
+            if path.exists():
+                result[key] = json.loads(path.read_text())
+        result["speaker_shards_completed"] = len(
+            list((directory / "speaker_parts").glob("part-*.pt"))
+        )
+        result["geometry_complete"] = [
+            method
+            for method in ("frozen", "partial")
+            if (directory / f"{method}_geometry_complete.json").exists()
+        ]
+        result["training_complete"] = [
+            str(path.relative_to(directory))
+            for path in sorted((directory / "runs").glob("*/*/complete.json"))
+        ]
+        worker = subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "show",
+                "lid-speaker-study.scope",
+                "-p",
+                "ActiveState",
+                "-p",
+                "MemoryCurrent",
+                "-p",
+                "MemoryMax",
+                "-p",
+                "MemorySwapMax",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        result["worker"] = dict(
+            line.split("=", 1) for line in worker.stdout.splitlines() if "=" in line
+        )
+        print(json.dumps(result, indent=2))
+        return
+    if "--extension" in sys.argv:
+        import subprocess
+
+        directory = Path("artifacts/extension15")
+        result = {}
+        for key, name in (
+            ("current", "status.json"),
+            ("pipeline", "pipeline.json"),
+            ("data", "data_ready.json"),
+        ):
+            if (directory / name).exists():
+                result[key] = json.loads((directory / name).read_text())
+        result["free_disk_gib"] = round(shutil.disk_usage(".").free / 1024**3, 1)
+        workers = {}
+        for unit in ("lid-extension15-cache.scope", "lid-extension15.scope"):
+            worker = subprocess.run(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    unit,
+                    "-p",
+                    "ActiveState",
+                    "-p",
+                    "MemoryCurrent",
+                    "-p",
+                    "MemoryMax",
+                    "-p",
+                    "MemorySwapMax",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            workers[unit] = dict(
+                line.split("=", 1) for line in worker.stdout.splitlines() if "=" in line
+            )
+        result["workers"] = workers
+        print(json.dumps(result, indent=2))
+        return
     prepared = sorted(path.stem.split(".")[0] for path in DATA.glob("*.extracted.json"))
     archives = sorted(path.stem for path in (DATA / "archives").glob("*.zip"))
     available = next(

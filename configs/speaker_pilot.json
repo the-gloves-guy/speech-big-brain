@@ -1,0 +1,18 @@
+{
+  "protocol": 1,
+  "seed": 42,
+  "languages": ["sam", "niu", "ton"],
+  "recordings_per_language": 100,
+  "cuts_per_recording": 2,
+  "sample_rate": 16000,
+  "minimum_speech_coverage": 0.7,
+  "durations": [3, 5, 10],
+  "linkages": ["average", "complete"],
+  "cluster_counts": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "resamples": 10,
+  "microbatch": 2,
+  "vram_limit_gib": 7,
+  "ecapa_repo": "speechbrain/spkrec-ecapa-voxceleb",
+  "ecapa_revision": "0f99f2d0ebe89ac095bcc5903c4dd8f72b367286",
+  "wespeaker_repo": "pyannote/wespeaker-voxceleb-resnet34-LM"
+}

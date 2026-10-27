@@ -14,3 +14,7 @@ artifacts/
 data/
 .pytest_cache/
 .ruff_cache/
+RemoteAccess.md
+validation_clips/
+.ipynb_checkpoints/
+chrome_profile/
